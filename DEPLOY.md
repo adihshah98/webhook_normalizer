@@ -2,7 +2,7 @@
 
 ## What Was Added
 
-- **Dockerfile** – Builds the app image, runs migrations on startup, then starts uvicorn
+- **Dockerfile** – Builds the app image, starts uvicorn (migrations run separately; see below)
 - **Alembic** – Schema migrations for `events` and `dlq` tables
 - **Postgres support** – `asyncpg` driver for `postgresql+asyncpg://` URLs
 - **DLQ in Postgres** – Dead-letter queue stored in `dlq` table instead of files
@@ -47,10 +47,7 @@ docker run -p 8000:8000 \
   webhook-adapter
 ```
 
-The container:
-
-1. Runs `alembic upgrade head` to apply migrations
-2. Starts `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+The container starts `uvicorn` only. **Run migrations separately** before deploy (see Migrations section below).
 
 ---
 
@@ -68,8 +65,8 @@ The container:
 
 1. New → Web Service
 2. Connect repo, use Docker
-3. Add Postgres from Render dashboard
-4. Set `DATABASE_URL` in Environment
+3. Add Postgres (Render or Supabase) and set `DATABASE_URL` in Environment
+4. **Run migrations locally** with `DATABASE_URL` set: `alembic upgrade head`
 5. Deploy
 
 ### Fly.io
@@ -111,7 +108,25 @@ Use Supabase Studio → Table Editor → `dlq`.
 
 ## 6. Migrations
 
-- **New schema changes:** Create a migration with `alembic revision --autogenerate -m "description"`, edit if needed, then `alembic upgrade head`
+Migrations are **not** run inside the container (avoids timeout issues with external DBs on free tiers). Run them manually before each deploy.
+
+### Before first deploy (and after schema changes)
+
+From your laptop (or CI) with `DATABASE_URL` set:
+
+```bash
+# Set DATABASE_URL to your production DB (Supabase, Render Postgres, etc.)
+export DATABASE_URL="postgresql+asyncpg://..."
+
+# Run migrations
+alembic upgrade head
+```
+
+Then deploy. The container will start and connect to the migrated database.
+
+### Other migration commands
+
+- **New schema changes:** `alembic revision --autogenerate -m "description"`, edit if needed, then `alembic upgrade head`
 - **Rollback:** `alembic downgrade -1`
 
 ---
