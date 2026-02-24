@@ -34,6 +34,7 @@ async def webhook(
         await request.body(),
         request.headers.get("X-Idempotency-Key"),
         getattr(request.state, "request_id", "unknown"),
+        stripe_signature=request.headers.get("Stripe-Signature"),
     )
     return JSONResponse(
         content=body.model_dump(mode="json", exclude_none=True),

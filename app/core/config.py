@@ -15,3 +15,5 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: float = 60.0
     # Optional webhook URL (Slack incoming webhook, etc.) to notify on success
     notification_webhook_url: str | None = None
+    # Stripe webhook signing secret (whsec_...) for signature verification
+    stripe_webhook_secret: str | None = None

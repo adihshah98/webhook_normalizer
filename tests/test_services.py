@@ -6,17 +6,21 @@ from app.db.models import Base
 from app.services.webhook_service import ingest
 from app.utils.event_id import derive_event_id
 from app.utils.validation import validate_webhook_body
+from tests.conftest import make_stripe_signature
 
-CRM_PAYLOAD = {
-    "event_type": "contact.created",
-    "event_id": "00X8a00000123Ab",
-    "occurred_at": "2024-01-01T12:34:56Z",
-    "account": {"id": "acct_789", "name": "Acme Corp"},
-    "contact": {
-        "id": "0038a00000456Cd",
-        "email": "alice@acme.com",
-        "first_name": "Alice",
-        "last_name": "Smith",
+STRIPE_PAYLOAD = {
+    "object": "event",
+    "id": "evt_1NG8Du2eZvKYlo2C",
+    "type": "invoice.paid",
+    "created": 1686089970,
+    "data": {
+        "object": {
+            "id": "in_1ABC123",
+            "customer": "cus_xyz789",
+            "amount_due": 1000,
+            "currency": "usd",
+            "status": "paid",
+        }
     },
 }
 
@@ -60,12 +64,14 @@ def test_validate_webhook_body_not_dict():
 
 
 @pytest.mark.asyncio
-async def test_ingest_created(db_session: AsyncSession):
+async def test_ingest_created(db_session: AsyncSession, stripe_webhook_secret: str):
+    raw = json.dumps(STRIPE_PAYLOAD).encode()
     body, status = await ingest(
         db_session,
-        json.dumps(CRM_PAYLOAD).encode(),
+        raw,
         None,
         "req-1",
+        stripe_signature=make_stripe_signature(raw, stripe_webhook_secret),
     )
     assert status == 201
     assert body.event_id
@@ -73,20 +79,28 @@ async def test_ingest_created(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_ingest_returns_standardized(db_session: AsyncSession):
+async def test_ingest_returns_standardized(db_session: AsyncSession, stripe_webhook_secret: str):
+    raw = json.dumps(STRIPE_PAYLOAD).encode()
     body, _ = await ingest(
-        db_session, json.dumps(CRM_PAYLOAD).encode(), None, "req-1"
+        db_session,
+        raw,
+        None,
+        "req-1",
+        stripe_signature=make_stripe_signature(raw, stripe_webhook_secret),
     )
     assert body.standardized
     std = body.standardized
-    assert std["source"] == "crm"
-    assert std["customer_id"] == "acct_789"
+    assert set(std.keys()) == {"event_id", "source", "extracted", "raw"}
+    assert std["source"] == "stripe"
+    assert std["extracted"]["customer_id"] == "cus_xyz789"
 
 
 @pytest.mark.asyncio
-async def test_ingest_duplicate(db_session: AsyncSession):
-    r1, s1 = await ingest(db_session, json.dumps(CRM_PAYLOAD).encode(), None, "r1")
-    r2, s2 = await ingest(db_session, json.dumps(CRM_PAYLOAD).encode(), None, "r2")
+async def test_ingest_duplicate(db_session: AsyncSession, stripe_webhook_secret: str):
+    raw = json.dumps(STRIPE_PAYLOAD).encode()
+    sig = make_stripe_signature(raw, stripe_webhook_secret)
+    r1, s1 = await ingest(db_session, raw, None, "r1", stripe_signature=sig)
+    r2, s2 = await ingest(db_session, raw, None, "r2", stripe_signature=sig)
     assert s1 == 201
     assert s2 == 200
     assert r1.event_id == r2.event_id
@@ -105,3 +119,19 @@ async def test_ingest_invalid_bad_json(db_session: AsyncSession):
     body, status = await ingest(db_session, b"not json", None, "req-1")
     assert status == 202
     assert body.status == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_ingest_stripe_signature_invalid(db_session: AsyncSession, monkeypatch):
+    """Stripe event with invalid signature returns 401 when secret is configured."""
+    monkeypatch.setattr(
+        "app.services.webhook_service._settings",
+        type("Settings", (), {"stripe_webhook_secret": "whsec_test123"})(),
+    )
+    raw = json.dumps(STRIPE_PAYLOAD).encode()
+    body, status = await ingest(
+        db_session, raw, None, "req-1", stripe_signature="t=1,v1=invalid"
+    )
+    assert status == 401
+    assert body.status == "invalid"
+    assert body.reason == "invalid signature"
