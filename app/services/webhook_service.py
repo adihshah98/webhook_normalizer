@@ -83,6 +83,12 @@ async def ingest(
     """Ingest webhook. Returns (WebhookOut, http_status_code)."""
     try:
         body = json.loads(raw) if raw else {}
+        logger.info(
+    "webhook_received",
+    request_id=request_id,
+    body_keys=list(body.keys()) if isinstance(body, dict) else None,
+    body_sample=body if isinstance(body, dict) and len(str(body)) < 2000 else "(truncated)",
+)
     except json.JSONDecodeError as e:
         await write_to_dlq(
             session,
@@ -150,6 +156,12 @@ async def ingest(
 
     event_id = derive_event_id(body, idempotency_key)
     standardized = normalize_webhook(body, event_id)
+    logger.info(
+    "webhook_classified",
+    request_id=request_id,
+    source=standardized["source"],
+    event_id=event_id,
+)
 
     async def persist():
         return await insert_event(session, event_id, json.dumps(standardized))
