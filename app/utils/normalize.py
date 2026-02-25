@@ -447,7 +447,8 @@ def normalize_paypal(raw: dict) -> dict:
     out["reference"] = str(related.get("order_id") or resource.get("custom_id") or resource.get("invoice_id") or "")
 
     out["payer_email"] = ""
-    payer = resource.get("payer") or resource.get("billing_agreement_id")
+    # resource.payer is the payer object (payment/capture events); absent on some subscription events.
+    payer = resource.get("payer")
     if isinstance(payer, dict):
         payer_info = payer.get("payer_info") or payer.get("email_address")
         if isinstance(payer_info, str):
