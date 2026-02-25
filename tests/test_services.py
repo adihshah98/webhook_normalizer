@@ -26,7 +26,7 @@ STRIPE_PAYLOAD = {
 
 
 @pytest.fixture
-async def db_session(tmp_path):
+async def db_session(tmp_path, monkeypatch):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/test.db", echo=False
     )
@@ -35,6 +35,9 @@ async def db_session(tmp_path):
     factory = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )
+    # Patch DLQ's async_session so it uses the test DB
+    import app.core.dlq as dlq_mod
+    monkeypatch.setattr(dlq_mod, "async_session", factory)
     async with factory() as session:
         yield session
     await engine.dispose()
@@ -133,6 +136,17 @@ async def test_ingest_invalid_bad_json(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_ingest_unknown_source_dlq(db_session: AsyncSession):
+    """Unknown source (unrecognized provider) is written to DLQ, not stored in events."""
+    payload = {"some": "random", "payload": 123}
+    body, status = await ingest(db_session, json.dumps(payload).encode(), "req-unknown")
+    assert status == 202
+    assert body.status == "invalid"
+    assert body.dlq is True
+    assert body.reason == "unknown source"
+
+
+@pytest.mark.asyncio
 async def test_ingest_stripe_signature_invalid(db_session: AsyncSession, monkeypatch):
     """Stripe event with invalid signature returns 401 when secret is configured."""
     monkeypatch.setattr(
@@ -140,7 +154,7 @@ async def test_ingest_stripe_signature_invalid(db_session: AsyncSession, monkeyp
         type(
             "Settings",
             (),
-            {"stripe_webhook_secret": "whsec_test123", "adyen_hmac_key": None, "paypal_webhook_id": None},
+            {"stripe_webhook_secret": "whsec_test123", "adyen_hmac_key": None, "paypal_webhook_id": None, "notification_webhook_url": None},
         )(),
     )
     raw = json.dumps(STRIPE_PAYLOAD).encode()
@@ -200,7 +214,7 @@ async def test_ingest_adyen_signature_invalid(db_session: AsyncSession, monkeypa
         type(
             "Settings",
             (),
-            {"stripe_webhook_secret": None, "adyen_hmac_key": "00" * 32, "paypal_webhook_id": None},
+            {"stripe_webhook_secret": None, "adyen_hmac_key": "00" * 32, "paypal_webhook_id": None, "notification_webhook_url": None},
         )(),
     )
     payload = make_adyen_signed_payload("44782DEF547AAA06C910C43932B1EB0C71FC68D9D0C057550C48EC2ACF6BA056")

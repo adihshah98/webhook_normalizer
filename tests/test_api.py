@@ -115,6 +115,16 @@ async def test_webhook_invalid_bad_json(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_webhook_unknown_source_dlq(client: AsyncClient):
+    """Unknown source (unrecognized provider) returns 202 and is sent to DLQ, not stored."""
+    r = await client.post("/webhook", json={"some": "random", "payload": 123})
+    assert r.status_code == 202
+    assert r.json()["status"] == "invalid"
+    assert r.json()["dlq"] is True
+    assert r.json()["reason"] == "unknown source"
+
+
+@pytest.mark.asyncio
 async def test_webhook_request_id_present(client: AsyncClient, stripe_webhook_secret: str):
     body, headers = _stripe_webhook_headers(STRIPE_PAYLOAD, stripe_webhook_secret)
     r = await client.post("/webhook", content=body, headers=headers)

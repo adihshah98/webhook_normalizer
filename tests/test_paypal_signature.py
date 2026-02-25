@@ -3,7 +3,7 @@
 import base64
 import zlib
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography import x509
@@ -32,7 +32,8 @@ def _make_test_cert_and_key():
     return key, cert_pem
 
 
-def test_verify_paypal_signature_valid():
+@pytest.mark.asyncio
+async def test_verify_paypal_signature_valid():
     """Valid RSA-SHA256 signature returns True."""
     raw_body = b'{"id":"WH-123","event_type":"PAYMENT.CAPTURE.COMPLETED","create_time":"2024-01-01T00:00:00Z"}'
     transmission_id = "trans-123"
@@ -47,8 +48,8 @@ def test_verify_paypal_signature_valid():
     transmission_sig = base64.b64encode(signature).decode()
     cert_url = "https://api.sandbox.paypal.com/v1/notifications/certs/test"
 
-    with patch("app.utils.paypal_signature._get_cert", return_value=cert_pem):
-        assert verify_paypal_signature(
+    with patch("app.utils.paypal_signature._get_cert", new_callable=AsyncMock, return_value=cert_pem):
+        assert await verify_paypal_signature(
             raw_body,
             transmission_id,
             transmission_time,
@@ -58,7 +59,8 @@ def test_verify_paypal_signature_valid():
         ) is True
 
 
-def test_verify_paypal_signature_invalid_wrong_sig():
+@pytest.mark.asyncio
+async def test_verify_paypal_signature_invalid_wrong_sig():
     """Wrong signature returns False."""
     raw_body = b'{"id":"WH-123"}'
     transmission_id = "t1"
@@ -71,9 +73,9 @@ def test_verify_paypal_signature_invalid_wrong_sig():
     signature = key.sign(wrong_message.encode(), padding.PKCS1v15(), hashes.SHA256())
     transmission_sig = base64.b64encode(signature).decode()
 
-    with patch("app.utils.paypal_signature._get_cert", return_value=cert_pem):
+    with patch("app.utils.paypal_signature._get_cert", new_callable=AsyncMock, return_value=cert_pem):
         assert (
-            verify_paypal_signature(
+            await verify_paypal_signature(
                 raw_body,
                 transmission_id,
                 transmission_time,
@@ -85,17 +87,19 @@ def test_verify_paypal_signature_invalid_wrong_sig():
         )
 
 
-def test_verify_paypal_signature_missing_headers():
+@pytest.mark.asyncio
+async def test_verify_paypal_signature_missing_headers():
     """Missing required headers returns False."""
     raw_body = b'{}'
-    assert verify_paypal_signature(raw_body, None, "t", "sig", "url", "w1") is False
-    assert verify_paypal_signature(raw_body, "tid", None, "sig", "url", "w1") is False
-    assert verify_paypal_signature(raw_body, "tid", "t", None, "url", "w1") is False
-    assert verify_paypal_signature(raw_body, "tid", "t", "sig", None, "w1") is False
-    assert verify_paypal_signature(raw_body, "tid", "t", "sig", "url", "") is False
+    assert await verify_paypal_signature(raw_body, None, "t", "sig", "url", "w1") is False
+    assert await verify_paypal_signature(raw_body, "tid", None, "sig", "url", "w1") is False
+    assert await verify_paypal_signature(raw_body, "tid", "t", None, "url", "w1") is False
+    assert await verify_paypal_signature(raw_body, "tid", "t", "sig", None, "w1") is False
+    assert await verify_paypal_signature(raw_body, "tid", "t", "sig", "url", "") is False
 
 
-def test_verify_paypal_signature_mock_webhook_id():
+@pytest.mark.asyncio
+async def test_verify_paypal_signature_mock_webhook_id():
     """Mock/simulated events use WEBHOOK_ID as webhook_id."""
     raw_body = b'{"id":"WH-mock"}'
     transmission_id = "mock-trans"
@@ -109,7 +113,7 @@ def test_verify_paypal_signature_mock_webhook_id():
     signature = key.sign(message.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
     transmission_sig = base64.b64encode(signature).decode()
 
-    with patch("app.utils.paypal_signature._get_cert", return_value=cert_pem):
-        assert verify_paypal_signature(
+    with patch("app.utils.paypal_signature._get_cert", new_callable=AsyncMock, return_value=cert_pem):
+        assert await verify_paypal_signature(
             raw_body, transmission_id, transmission_time, transmission_sig, cert_url, webhook_id
         ) is True

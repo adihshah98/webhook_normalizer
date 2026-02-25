@@ -10,7 +10,10 @@ Stored/API output shape: only event_id, source, extracted, raw.
 - raw: full inbound webhook body.
 """
 
+import structlog
 from typing import Any, Callable
+
+logger = structlog.get_logger()
 
 Normalizer = Callable[[dict], dict]
 
@@ -316,6 +319,13 @@ def normalize_adyen(raw: dict) -> dict:
     items = raw.get("notificationItems") or []
     if not items or not isinstance(items, list):
         return _empty_extracted()
+    if len(items) > 1:
+        logger.warning(
+            "adyen_batch_webhook_truncated",
+            total_items=len(items),
+            processing=1,
+            message="Only the first NotificationRequestItem is processed; remaining items are discarded",
+        )
     first = items[0]
     item = first.get("NotificationRequestItem") if isinstance(first, dict) else {}
     if not isinstance(item, dict):
@@ -330,7 +340,7 @@ def normalize_adyen(raw: dict) -> dict:
     out["occurred_at"] = item.get("eventDate")
     out["amount"] = _extract_adyen_amount(item)
     success_val = item.get("success")
-    out["success"] = bool(success_val) if success_val is not None else None
+    out["success"] = str(success_val).lower() == "true" if success_val is not None else None
     out["merchant_account"] = str(item.get("merchantAccountCode") or "")
     out["reference"] = str(item.get("merchantReference") or "")
     live_str = raw.get("live")

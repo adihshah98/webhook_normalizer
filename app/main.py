@@ -2,14 +2,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.routes import router
-from app.core.config import Settings
+from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.rate_limit import InMemoryRateLimiter
 from app.core.retry import with_retry
 from app.db.session import init_db
 from app.middleware.request_log import RequestLogMiddleware
 
-settings = Settings()
+settings = get_settings()
 
 
 @asynccontextmanager

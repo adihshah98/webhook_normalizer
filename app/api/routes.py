@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.deps import get_session
 from app.core.rate_limit import rate_limit_dep
 from app.db.session import check_ready
@@ -29,8 +30,16 @@ async def webhook(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(rate_limit_dep),
 ) -> JSONResponse:
+    # Reject oversized payloads before reading into memory
+    settings = get_settings()
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.max_body_size:
+        raise HTTPException(status_code=413, detail="Request body too large")
+
     raw_body = await request.body()
-    
+    if len(raw_body) > settings.max_body_size:
+        raise HTTPException(status_code=413, detail="Request body too large")
+
     # Pass headers as dict so ingest can read Stripe/PayPal verification headers
     header_dict = dict(request.headers) if request.headers else None
     body, status_code = await ingest(

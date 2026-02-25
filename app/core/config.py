@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,3 +23,10 @@ class Settings(BaseSettings):
     adyen_hmac_key: str | None = None
     # PayPal webhook ID (from subscription config) for signature verification
     paypal_webhook_id: str | None = None
+    # Max allowed request body size in bytes (default 1MB)
+    max_body_size: int = 1_048_576
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

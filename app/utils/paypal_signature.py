@@ -2,16 +2,29 @@
 
 import base64
 import zlib
+from functools import lru_cache
+
 import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 
-# Simple in-memory cert cache (url -> PEM string)
+# LRU-bounded cert cache (url -> PEM string), max 64 entries
 _cert_cache: dict[str, str] = {}
+_CERT_CACHE_MAX = 64
+
+# Shared async client (created lazily)
+_async_client: httpx.AsyncClient | None = None
 
 
-def verify_paypal_signature(
+def _get_async_client() -> httpx.AsyncClient:
+    global _async_client
+    if _async_client is None or _async_client.is_closed:
+        _async_client = httpx.AsyncClient(timeout=10.0)
+    return _async_client
+
+
+async def verify_paypal_signature(
     raw_body: bytes,
     transmission_id: str | None,
     transmission_time: str | None,
@@ -49,7 +62,7 @@ def verify_paypal_signature(
         signature_bytes = base64.b64decode(transmission_sig)
 
         # 3. Load PayPal's public cert and verify the signature (RSA-SHA256)
-        cert_pem = _get_cert(cert_url)
+        cert_pem = await _get_cert(cert_url)
         cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
         public_key = cert.public_key()
         public_key.verify(
@@ -63,13 +76,17 @@ def verify_paypal_signature(
         return False
 
 
-def _get_cert(url: str) -> str:
-    """Fetch PEM cert from URL, with simple in-memory cache."""
+async def _get_cert(url: str) -> str:
+    """Fetch PEM cert from URL, with bounded in-memory cache."""
     if url in _cert_cache:
         return _cert_cache[url]
-    with httpx.Client() as client:
-        resp = client.get(url, timeout=10.0)
-        resp.raise_for_status()
-        pem = resp.text
+    client = _get_async_client()
+    resp = await client.get(url, timeout=10.0)
+    resp.raise_for_status()
+    pem = resp.text
+    # Evict oldest entries if cache is full
+    if len(_cert_cache) >= _CERT_CACHE_MAX:
+        oldest_key = next(iter(_cert_cache))
+        del _cert_cache[oldest_key]
     _cert_cache[url] = pem
     return pem

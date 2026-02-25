@@ -3,10 +3,21 @@ import structlog
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings
+# Shared async client for outbound notifications 
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=5.0)
+    return _http_client
+
+from app.core.config import get_settings
 from app.core.dlq import write_to_dlq
 from app.core.retry import with_retry
 from app.db.events import insert_event
+from app.db.session import async_session
 from app.models.schemas import WebhookOut
 from app.utils.event_id import derive_event_id
 from app.utils.normalize import detect_source, normalize_webhook
@@ -17,7 +28,7 @@ from app.utils.validation import validate_webhook_body
 
 logger = structlog.get_logger()
 _HTTP_STATUS = {"invalid": 202, "created": 201, "duplicate": 200}
-_settings = Settings()
+_settings = get_settings()
 
 
 async def _notify_webhook(event_id: str, provider: str) -> None:
@@ -90,7 +101,6 @@ async def ingest(
         )
     except json.JSONDecodeError as e:
         await write_to_dlq(
-            session,
             {"raw": raw.decode(errors="replace")},
             f"invalid json: {e}",
             request_id,
@@ -100,7 +110,7 @@ async def ingest(
 
     reason = validate_webhook_body(body)
     if reason:
-        await write_to_dlq(session, body, reason, request_id)
+        await write_to_dlq(body, reason, request_id)
         logger.warning("webhook_invalid", reason=reason, request_id=request_id)
         return WebhookOut(status="invalid", dlq=True, reason="invalid event"), 202
 
@@ -110,7 +120,7 @@ async def ingest(
             raw, _get_header(headers, "Stripe-Signature"), _settings.stripe_webhook_secret
         ):
             await write_to_dlq(
-                session, body, "stripe signature verification failed", request_id
+                body, "stripe signature verification failed", request_id
             )
             logger.warning(
                 "webhook_invalid",
@@ -124,7 +134,7 @@ async def ingest(
         first_item = body["notificationItems"][0]
         if not verify_adyen_signature(first_item, _settings.adyen_hmac_key):
             await write_to_dlq(
-                session, body, "adyen HMAC verification failed", request_id
+                body, "adyen HMAC verification failed", request_id
             )
             logger.warning(
                 "webhook_invalid",
@@ -135,7 +145,7 @@ async def ingest(
 
     # PayPal signature verification (when webhook_id is configured; detect by header)
     if _get_header(headers, "paypal-transmission-id") and _settings.paypal_webhook_id:
-        if not verify_paypal_signature(
+        if not await verify_paypal_signature(
             raw,
             _get_header(headers, "paypal-transmission-id"),
             _get_header(headers, "paypal-transmission-time"),
@@ -144,7 +154,7 @@ async def ingest(
             _settings.paypal_webhook_id,
         ):
             await write_to_dlq(
-                session, body, "paypal signature verification failed", request_id
+                body, "paypal signature verification failed", request_id
             )
             logger.warning(
                 "webhook_invalid",
@@ -154,6 +164,11 @@ async def ingest(
             return WebhookOut(status="invalid", dlq=True, reason="invalid signature"), 401
 
     source = detect_source(body, headers)
+    if source == "unknown":
+        await write_to_dlq(body, "unknown source: unrecognized provider", request_id)
+        logger.warning("webhook_unknown_source", request_id=request_id)
+        return WebhookOut(status="invalid", dlq=True, reason="unknown source"), 202
+
     event_id = derive_event_id(source, body)
     standardized = normalize_webhook(body, event_id, headers=headers)
 
@@ -174,7 +189,8 @@ async def ingest(
         event_id=event_id,
         request_id=request_id,
     )
-    await _notify_webhook(event_id, standardized["source"])
+    if status == "created":
+        await _notify_webhook(event_id, standardized["source"])
 
     out = WebhookOut(status=status, event_id=event_id, standardized=standardized)
     return out, _HTTP_STATUS[status]

@@ -2,6 +2,7 @@ import base64
 import binascii
 import hmac
 import hashlib
+import time
 from pathlib import Path
 
 import pytest
@@ -12,14 +13,16 @@ from app.main import app
 from app.core.deps import get_session
 from app.db.models import Base
 
-# Fake secret for tests only. Never use a real Stripe webhook secret in tests or CI.
+# Fake secret for tests only
 TEST_WEBHOOK_SECRET = "whsec_test_secret_123"
 # Fake Adyen HMAC key (hex) for tests only.
 TEST_ADYEN_HMAC_KEY = "44782DEF547AAA06C910C43932B1EB0C71FC68D9D0C057550C48EC2ACF6BA056"
 
 
-def make_stripe_signature(payload: bytes, secret: str, timestamp: str = "1234567890") -> str:
+def make_stripe_signature(payload: bytes, secret: str, timestamp: str | None = None) -> str:
     """Build a valid Stripe-Signature header using Stripe's algorithm (HMAC-SHA256)."""
+    if timestamp is None:
+        timestamp = str(int(time.time()))
     signed_payload = f"{timestamp}.{payload.decode('utf-8')}"
     signature = hmac.new(
         secret.encode(),
@@ -117,7 +120,7 @@ def adyen_hmac_key():
 
 
 @pytest.fixture
-async def client(tmp_path: Path):
+async def client(tmp_path: Path, monkeypatch):
     """Test client with isolated DB (events + dlq tables)."""
     db_path = tmp_path / "test.db"
 
@@ -137,6 +140,10 @@ async def client(tmp_path: Path):
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
+
+    # Patch DLQ's async_session so it uses the test DB
+    import app.core.dlq as dlq_mod
+    monkeypatch.setattr(dlq_mod, "async_session", test_session_factory)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

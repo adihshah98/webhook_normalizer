@@ -1,13 +1,17 @@
+import json
 import pytest
-from unittest.mock import patch
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.conftest import make_stripe_signature
 
-CRM_PAYLOAD = {
-    "event_type": "contact.created",
-    "account": {"id": "acct_789"},
-    "contact": {"id": "c1", "email": "a@b.com"},
+# Stripe-shaped payload so request is processed (201); unknown payload would get 202
+STRIPE_PAYLOAD = {
+    "object": "event",
+    "id": "evt_rate_limit_test",
+    "type": "invoice.paid",
+    "created": 1686089970,
+    "data": {"object": {"id": "in_1", "customer": "cus_1"}},
 }
 
 
@@ -51,10 +55,15 @@ async def rate_limited_client(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_returns_429_when_exceeded(rate_limited_client):
-    r1 = await rate_limited_client.post("/webhook", json=CRM_PAYLOAD)
-    r2 = await rate_limited_client.post("/webhook", json=CRM_PAYLOAD)
-    r3 = await rate_limited_client.post("/webhook", json=CRM_PAYLOAD)
+async def test_rate_limit_returns_429_when_exceeded(rate_limited_client, stripe_webhook_secret: str):
+    body = json.dumps(STRIPE_PAYLOAD).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Stripe-Signature": make_stripe_signature(body, stripe_webhook_secret),
+    }
+    r1 = await rate_limited_client.post("/webhook", content=body, headers=headers)
+    r2 = await rate_limited_client.post("/webhook", content=body, headers=headers)
+    r3 = await rate_limited_client.post("/webhook", content=body, headers=headers)
 
     assert r1.status_code in (200, 201)
     assert r2.status_code in (200, 201)

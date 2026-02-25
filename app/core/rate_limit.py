@@ -33,6 +33,12 @@ class InMemoryRateLimiter:
         cutoff = now - self.window_seconds
 
         async with self._lock:
+            # Periodically prune stale keys to prevent unbounded growth
+            if len(self._timestamps) > 10_000:
+                stale = [k for k, v in self._timestamps.items() if not v or v[-1] <= cutoff]
+                for k in stale:
+                    del self._timestamps[k]
+
             ts_list = self._timestamps[key]
             ts_list[:] = [t for t in ts_list if t > cutoff]
             if len(ts_list) >= self.requests_per_window:

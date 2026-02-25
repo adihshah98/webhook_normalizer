@@ -2,12 +2,18 @@
 
 import hmac
 import hashlib
+import time
+
+# Maximum age of a signature before it's rejected (seconds).
+# Stripe's own library uses 300s (5 minutes).
+DEFAULT_TOLERANCE_SECONDS = 300
 
 
 def verify_stripe_signature(
     payload: bytes,
     signature_header: str | None,
     secret: str,
+    tolerance: int = DEFAULT_TOLERANCE_SECONDS,
 ) -> bool:
     """
     Verify that the webhook payload was sent by Stripe.
@@ -16,6 +22,7 @@ def verify_stripe_signature(
         payload: Raw request body (bytes).
         signature_header: Value of the Stripe-Signature header.
         secret: Webhook signing secret (whsec_...).
+        tolerance: Max allowed age of the signature in seconds (default 300).
 
     Returns:
         True if the signature is valid, False otherwise.
@@ -34,6 +41,10 @@ def verify_stripe_signature(
             elif part.startswith("v1="):
                 v1_sig = part[3:]
         if not timestamp or not v1_sig:
+            return False
+
+        # Reject signatures that are too old (replay protection)
+        if abs(time.time() - int(timestamp)) > tolerance:
             return False
 
         signed_payload = f"{timestamp}.{payload.decode('utf-8')}"
