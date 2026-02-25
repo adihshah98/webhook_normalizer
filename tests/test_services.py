@@ -209,7 +209,12 @@ async def test_ingest_paypal_signature_invalid(db_session: AsyncSession, monkeyp
         type(
             "Settings",
             (),
-            {"stripe_webhook_secret": None, "adyen_hmac_key": None, "paypal_webhook_id": "WH-SUB-123"},
+            {
+                "stripe_webhook_secret": None,
+                "adyen_hmac_key": None,
+                "paypal_webhook_id": "WH-SUB-123",
+                "notification_webhook_url": None,
+            },
         )(),
     )
     payload = {
@@ -219,6 +224,8 @@ async def test_ingest_paypal_signature_invalid(db_session: AsyncSession, monkeyp
         "resource": {"id": "cap-1", "status": "COMPLETED", "amount": {"value": "10.00", "currency_code": "USD"}},
     }
     raw = json.dumps(payload).encode()
-    body, status = await ingest(db_session, raw, None, "req-paypal", headers=None)
+    # Pass paypal-transmission-id so we attempt verification; other headers missing → verification fails → 401
+    headers = {"paypal-transmission-id": "t-123"}
+    body, status = await ingest(db_session, raw, None, "req-paypal", headers=headers)
     assert status == 401
     assert body.reason == "invalid signature"

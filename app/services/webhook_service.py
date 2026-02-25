@@ -84,11 +84,11 @@ async def ingest(
     try:
         body = json.loads(raw) if raw else {}
         logger.info(
-    "webhook_received",
-    request_id=request_id,
-    body_keys=list(body.keys()) if isinstance(body, dict) else None,
-    body_sample=body if isinstance(body, dict) and len(str(body)) < 2000 else "(truncated)",
-)
+            "webhook_received",
+            request_id=request_id,
+            body_keys=list(body.keys()) if isinstance(body, dict) else None,
+            body_sample=body if isinstance(body, dict) and len(str(body)) < 2000 else "(truncated)",
+        )
     except json.JSONDecodeError as e:
         await write_to_dlq(
             session,
@@ -105,8 +105,8 @@ async def ingest(
         logger.warning("webhook_invalid", reason=reason, request_id=request_id)
         return WebhookOut(status="invalid", dlq=True, reason="invalid event"), 202
 
-    # Stripe signature verification (when secret is configured)
-    if _is_stripe_event(body) and _settings.stripe_webhook_secret:
+    # Stripe signature verification (when secret is configured; detect by header)
+    if _get_header(headers, "Stripe-Signature") and _settings.stripe_webhook_secret:
         if not verify_stripe_signature(
             raw, _get_header(headers, "Stripe-Signature"), _settings.stripe_webhook_secret
         ):
@@ -134,8 +134,8 @@ async def ingest(
             )
             return WebhookOut(status="invalid", dlq=True, reason="invalid signature"), 401
 
-    # PayPal signature verification (when webhook_id is configured)
-    if _is_paypal_event(body) and _settings.paypal_webhook_id:
+    # PayPal signature verification (when webhook_id is configured; detect by header)
+    if _get_header(headers, "paypal-transmission-id") and _settings.paypal_webhook_id:
         if not verify_paypal_signature(
             raw,
             _get_header(headers, "paypal-transmission-id"),
@@ -155,13 +155,14 @@ async def ingest(
             return WebhookOut(status="invalid", dlq=True, reason="invalid signature"), 401
 
     event_id = derive_event_id(body, idempotency_key)
-    standardized = normalize_webhook(body, event_id)
+    standardized = normalize_webhook(body, event_id, headers=headers)
+
     logger.info(
-    "webhook_classified",
-    request_id=request_id,
-    source=standardized["source"],
-    event_id=event_id,
-)
+        "webhook_classified",
+        request_id=request_id,
+        source=standardized["source"],
+        event_id=event_id,
+    )
 
     async def persist():
         return await insert_event(session, event_id, json.dumps(standardized))

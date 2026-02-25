@@ -481,30 +481,51 @@ NORMALIZERS: dict[str, Normalizer] = {
 }
 
 
-def _detect_source(raw: dict) -> str:
-    """Detect provider from payload structure (Stripe Event, Adyen, or PayPal)."""
+def _get_header(headers: dict | None, key: str) -> str | None:
+    """Case-insensitive header lookup."""
+    if not headers:
+        return None
+    key_lower = key.lower()
+    for k, v in headers.items():
+        if k.lower() == key_lower:
+            return v
+    return None
+
+
+def _detect_source(raw: dict, headers: dict | None = None) -> str:
+    """Detect provider: Stripe and PayPal from headers when present, else Adyen/unknown from body."""
+    # Stripe and PayPal: use headers (they always send these when delivering webhooks)
+    if headers is not None:
+        if _get_header(headers, "Stripe-Signature"):
+            return "stripe"
+        if _get_header(headers, "paypal-transmission-id"):
+            return "paypal"
+    # Adyen and fallback: body-based (Adyen doesn't send a unique identifying header)
     if not isinstance(raw, dict):
         return "unknown"
-    if raw.get("object") == "event":
-        data = raw.get("data")
-        if isinstance(data, dict) and "object" in data:
-            return "stripe"
     items = raw.get("notificationItems")
     if isinstance(items, list) and len(items) > 0:
         first = items[0]
         if isinstance(first, dict) and "NotificationRequestItem" in first:
             return "adyen"
+    if raw.get("object") == "event":
+        data = raw.get("data")
+        if isinstance(data, dict) and "object" in data:
+            return "stripe"
     if raw.get("event_type") and raw.get("id") and "create_time" in raw:
+        return "paypal"
+    if raw.get("eventType") and raw.get("id") and "createTime" in raw:
         return "paypal"
     return "unknown"
 
 
-def normalize_webhook(raw: dict, event_id: str) -> dict:
+def normalize_webhook(raw: dict, event_id: str, headers: dict | None = None) -> dict:
     """
     Map inbound webhook to standardized output.
     Top-level keys only: event_id, source, extracted, raw.
+    When headers is provided, Stripe and PayPal are detected from headers; else from body.
     """
-    source = _detect_source(raw)
+    source = _detect_source(raw, headers)
     if source == "unknown":
         extracted = _normalize_unknown(raw)
     else:
