@@ -17,3 +17,7 @@ class Settings(BaseSettings):
     notification_webhook_url: str | None = None
     # Stripe webhook signing secret (whsec_...) for signature verification
     stripe_webhook_secret: str | None = None
+    # Adyen Standard webhook HMAC key (hex) for signature verification
+    adyen_hmac_key: str | None = None
+    # PayPal webhook ID (from subscription config) for signature verification
+    paypal_webhook_id: str | None = None

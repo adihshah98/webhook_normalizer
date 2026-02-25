@@ -3,7 +3,7 @@ import json
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import make_stripe_signature
+from tests.conftest import adyen_hmac_key, make_adyen_signed_payload, make_stripe_signature
 
 STRIPE_PAYLOAD = {
     "object": "event",
@@ -123,3 +123,93 @@ async def test_webhook_request_id_present(client: AsyncClient, stripe_webhook_se
     body, headers = _stripe_webhook_headers(STRIPE_PAYLOAD, stripe_webhook_secret)
     r = await client.post("/webhook", content=body, headers=headers)
     assert r.status_code == 201
+
+
+# --- Adyen ---
+
+
+@pytest.mark.asyncio
+async def test_webhook_adyen_created(client: AsyncClient, adyen_hmac_key: str):
+    payload = make_adyen_signed_payload(adyen_hmac_key)
+    body = json.dumps(payload).encode("utf-8")
+    r = await client.post(
+        "/webhook",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert "event_id" in data
+    assert "standardized" in data
+    assert set(data["standardized"].keys()) == {"event_id", "source", "extracted", "raw"}
+    assert data["standardized"]["extracted"]["event_type"] == "AUTHORISATION"
+
+
+@pytest.mark.asyncio
+async def test_webhook_adyen_returns_standardized(client: AsyncClient, adyen_hmac_key: str):
+    payload = make_adyen_signed_payload(adyen_hmac_key)
+    body = json.dumps(payload).encode("utf-8")
+    r = await client.post(
+        "/webhook",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert data["standardized"]["source"] == "adyen"
+    e = data["standardized"]["extracted"]
+    assert e["merchant_account"] == "TestMerchant"
+    assert e["amount"]["value"] == 1130
+    assert e["amount"]["currency"] == "EUR"
+    assert data["standardized"]["raw"]["notificationItems"][0]["NotificationRequestItem"]["pspReference"] == "7914073381342284"
+
+
+# --- PayPal ---
+
+
+@pytest.mark.asyncio
+async def test_webhook_paypal_created(client: AsyncClient):
+    """PayPal webhook accepted when paypal_webhook_id not configured (no verification)."""
+    payload = {
+        "id": "WH-test-123",
+        "event_type": "PAYMENT.CAPTURE.COMPLETED",
+        "create_time": "2024-05-16T05:19:19Z",
+        "resource_type": "capture",
+        "resource": {
+            "id": "capture-xyz",
+            "status": "COMPLETED",
+            "amount": {"value": "10.00", "currency_code": "USD"},
+            "payee": {"merchant_id": "M123"},
+        },
+    }
+    r = await client.post("/webhook", json=payload)
+    assert r.status_code == 201
+    data = r.json()
+    assert data["standardized"]["source"] == "paypal"
+    assert data["standardized"]["extracted"]["event_type"] == "PAYMENT.CAPTURE.COMPLETED"
+    assert data["standardized"]["extracted"]["canonical_event_type"] == "payment.captured"
+
+
+@pytest.mark.asyncio
+async def test_webhook_paypal_returns_standardized(client: AsyncClient):
+    """PayPal webhook normalizes to canonical schema."""
+    payload = {
+        "id": "WH-abc",
+        "event_type": "PAYMENT.CAPTURE.COMPLETED",
+        "create_time": "2024-05-16T05:19:19Z",
+        "resource": {
+            "id": "cap-1",
+            "status": "COMPLETED",
+            "amount": {"value": "99.99", "currency_code": "EUR"},
+            "payee": {"merchant_id": "MerchantXYZ"},
+            "supplementary_data": {"related_ids": {"order_id": "ord-123"}},
+        },
+    }
+    r = await client.post("/webhook", json=payload)
+    assert r.status_code == 201
+    data = r.json()
+    assert data["standardized"]["source"] == "paypal"
+    e = data["standardized"]["extracted"]
+    assert e["amount"]["value"] == 9999
+    assert e["amount"]["currency"] == "EUR"
+    assert e["reference"] == "ord-123"

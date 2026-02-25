@@ -1,3 +1,5 @@
+import base64
+import binascii
 import hmac
 import hashlib
 from pathlib import Path
@@ -12,6 +14,8 @@ from app.db.models import Base
 
 # Fake secret for tests only. Never use a real Stripe webhook secret in tests or CI.
 TEST_WEBHOOK_SECRET = "whsec_test_secret_123"
+# Fake Adyen HMAC key (hex) for tests only.
+TEST_ADYEN_HMAC_KEY = "44782DEF547AAA06C910C43932B1EB0C71FC68D9D0C057550C48EC2ACF6BA056"
 
 
 def make_stripe_signature(payload: bytes, secret: str, timestamp: str = "1234567890") -> str:
@@ -23,6 +27,59 @@ def make_stripe_signature(payload: bytes, secret: str, timestamp: str = "1234567
         hashlib.sha256,
     ).hexdigest()
     return f"t={timestamp},v1={signature}"
+
+
+def _adyen_signing_string(item: dict) -> str:
+    """Build the colon-delimited string used for Adyen HMAC (without additionalData)."""
+    request_dict = dict(item)
+    request_dict.pop("additionalData", None)
+    amount = request_dict.get("amount")
+    if isinstance(amount, dict):
+        request_dict["value"] = amount.get("value", "")
+        request_dict["currency"] = amount.get("currency", "")
+    else:
+        request_dict["value"] = ""
+        request_dict["currency"] = ""
+    element_orders = [
+        "pspReference",
+        "originalReference",
+        "merchantAccountCode",
+        "merchantReference",
+        "value",
+        "currency",
+        "eventCode",
+        "success",
+    ]
+    return ":".join(str(request_dict.get(el, "")) for el in element_orders)
+
+
+def make_adyen_signed_payload(
+    hmac_key_hex: str,
+    item: dict | None = None,
+) -> dict:
+    """Build an Adyen Standard webhook body with one signed NotificationRequestItem."""
+    if item is None:
+        item = {
+            "amount": {"value": 1130, "currency": "EUR"},
+            "pspReference": "7914073381342284",
+            "eventCode": "AUTHORISATION",
+            "eventDate": "2019-05-06T17:15:34.121+02:00",
+            "merchantAccountCode": "TestMerchant",
+            "merchantReference": "TestPayment-1407325143704",
+            "paymentMethod": "visa",
+            "success": "true",
+        }
+    item = dict(item)
+    key_bytes = binascii.a2b_hex(hmac_key_hex.strip())
+    signing_string = _adyen_signing_string(item)
+    sig = base64.b64encode(
+        hmac.new(key_bytes, signing_string.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("utf-8")
+    item.setdefault("additionalData", {})["hmacSignature"] = sig
+    return {
+        "live": "false",
+        "notificationItems": [{"NotificationRequestItem": item}],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +96,8 @@ def use_test_webhook_secret(monkeypatch):
             (),
             {
                 "stripe_webhook_secret": TEST_WEBHOOK_SECRET,
+                "adyen_hmac_key": TEST_ADYEN_HMAC_KEY,
+                "paypal_webhook_id": None,
                 "notification_webhook_url": None,
             },
         )(),
@@ -49,6 +108,12 @@ def use_test_webhook_secret(monkeypatch):
 def stripe_webhook_secret():
     """Fake Stripe webhook secret for signing requests in tests. Matches use_test_webhook_secret."""
     return TEST_WEBHOOK_SECRET
+
+
+@pytest.fixture
+def adyen_hmac_key():
+    """Fake Adyen HMAC key for signing requests in tests."""
+    return TEST_ADYEN_HMAC_KEY
 
 
 @pytest.fixture

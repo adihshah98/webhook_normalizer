@@ -14,8 +14,10 @@ Optional server-added fields (e.g. `recorded_at`) may appear at top level when a
 | Field | Type | Description |
 |-------|------|-------------|
 | `provider_event_id` | string | Provider's event/object id |
-| `event_type` | string | Provider event type (e.g. `invoice.paid`, `charge.succeeded`) |
+| `event_type` | string | Provider event type (e.g. `invoice.paid`, `charge.succeeded`, `AUTHORISATION`) |
 | `entity_type` | string | High-level entity: `charge`, `refund`, `invoice`, `customer`, etc. |
+| `canonical_event_type` | string | Cross-provider event: `payment.authorised`, `payment.captured`, `payment.refunded`, `payment.cancelled`, `payment.failed`, `invoice.paid`, `customer.created`, `dispute`, `other` |
+| `canonical_payment_method` | string | Cross-provider method: `card`, `paypal`, `bank_transfer`, `other` |
 | `occurred_at` | int \| string \| null | When the event happened (e.g. Unix timestamp) |
 | `customer_id` | string | Provider customer id or email |
 | `amount` | `{value, currency}` \| null | Amount in minor units; currency ISO |

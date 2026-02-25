@@ -1,6 +1,6 @@
 # webhook-adapter
 
-Ingest payment webhooks (Stripe, and later Adyen/PayPal), normalize to a common schema, and persist.
+Ingest payment webhooks (Stripe, Adyen, and later PayPal), normalize to a common schema, and persist.
 
 ## Canonical webhook schema
 

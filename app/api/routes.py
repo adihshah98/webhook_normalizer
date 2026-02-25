@@ -29,12 +29,15 @@ async def webhook(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(rate_limit_dep),
 ) -> JSONResponse:
+    raw_body = await request.body()
+    # Pass headers as dict so ingest can read Stripe/PayPal verification headers
+    header_dict = dict(request.headers) if request.headers else None
     body, status_code = await ingest(
         session,
-        await request.body(),
-        request.headers.get("X-Idempotency-Key"),
+        raw_body,
+        request.headers.get("X-Idempotency-Key") if request.headers else None,
         getattr(request.state, "request_id", "unknown"),
-        stripe_signature=request.headers.get("Stripe-Signature"),
+        headers=header_dict,
     )
     return JSONResponse(
         content=body.model_dump(mode="json", exclude_none=True),
