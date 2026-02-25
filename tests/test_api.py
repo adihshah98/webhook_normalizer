@@ -55,7 +55,7 @@ async def test_webhook_created(client: AsyncClient, stripe_webhook_secret: str):
     assert r.status_code == 201
     data = r.json()
     assert "event_id" in data
-    assert len(data["event_id"]) == 64
+    assert 1 <= len(data["event_id"]) <= 256
     assert "standardized" in data
     assert set(data["standardized"].keys()) == {"event_id", "source", "extracted", "raw"}
     assert data["standardized"]["extracted"]["event_type"] == "invoice.paid"
@@ -77,18 +77,14 @@ async def test_webhook_returns_standardized(client: AsyncClient, stripe_webhook_
 
 @pytest.mark.asyncio
 async def test_webhook_duplicate_idempotent(client: AsyncClient, stripe_webhook_secret: str):
-    body1, headers1 = _stripe_webhook_headers(
-        STRIPE_PAYLOAD, stripe_webhook_secret, {"X-Idempotency-Key": "key-abc"}
-    )
-    r1 = await client.post("/webhook", content=body1, headers=headers1)
-    r2 = await client.post(
-        "/webhook",
-        content=json.dumps({"other": "data"}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Idempotency-Key": "key-abc"},
-    )
+    """Duplicate is detected by provider event id (Stripe event.id), not X-Idempotency-Key."""
+    body, headers = _stripe_webhook_headers(STRIPE_PAYLOAD, stripe_webhook_secret)
+    r1 = await client.post("/webhook", content=body, headers=headers)
+    r2 = await client.post("/webhook", content=body, headers=headers)
     assert r1.status_code == 201
     assert r2.status_code == 200
-    assert r1.json()["event_id"] == r2.json()["event_id"] == "key-abc"
+    expected_id = "stripe:evt_1NG8Du2eZvKYlo2C"
+    assert r1.json()["event_id"] == r2.json()["event_id"] == expected_id
 
 
 @pytest.mark.asyncio

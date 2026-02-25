@@ -40,15 +40,27 @@ async def db_session(tmp_path):
     await engine.dispose()
 
 
-@pytest.mark.asyncio
-async def test_derive_event_id_deterministic():
+def test_derive_event_id_deterministic():
     body = {"a": 1, "b": 2}
-    assert derive_event_id(body, None) == derive_event_id(body, None)
+    assert derive_event_id("unknown", body) == derive_event_id("unknown", body)
 
 
-@pytest.mark.asyncio
-async def test_derive_event_id_idempotency_key():
-    assert derive_event_id({"a": 1}, "my-key-123") == "my-key-123"
+def test_derive_event_id_provider_keys():
+    assert derive_event_id("stripe", {"id": "evt_1NG8Du2eZvKYlo2C"}) == "stripe:evt_1NG8Du2eZvKYlo2C"
+    assert derive_event_id("paypal", {"id": "8PT597110X687430LKGECATA"}) == "paypal:8PT597110X687430LKGECATA"
+    assert derive_event_id(
+        "adyen",
+        {
+            "notificationItems": [
+                {"NotificationRequestItem": {"eventCode": "AUTHORISATION", "pspReference": "8835761234567890"}}
+            ]
+        },
+    ) == "adyen:AUTHORISATION:8835761234567890"
+    # unknown fallback is hash
+    key = derive_event_id("unknown", {"a": 1})
+    assert key is not None
+    assert len(key) <= 64
+    assert key == derive_event_id("unknown", {"a": 1})
 
 
 def test_validate_webhook_body_valid():
@@ -69,7 +81,6 @@ async def test_ingest_created(db_session: AsyncSession, stripe_webhook_secret: s
     body, status = await ingest(
         db_session,
         raw,
-        None,
         "req-1",
         headers={"Stripe-Signature": make_stripe_signature(raw, stripe_webhook_secret)},
     )
@@ -84,7 +95,6 @@ async def test_ingest_returns_standardized(db_session: AsyncSession, stripe_webh
     body, _ = await ingest(
         db_session,
         raw,
-        None,
         "req-1",
         headers={"Stripe-Signature": make_stripe_signature(raw, stripe_webhook_secret)},
     )
@@ -100,8 +110,8 @@ async def test_ingest_duplicate(db_session: AsyncSession, stripe_webhook_secret:
     raw = json.dumps(STRIPE_PAYLOAD).encode()
     sig = make_stripe_signature(raw, stripe_webhook_secret)
     h = {"Stripe-Signature": sig}
-    r1, s1 = await ingest(db_session, raw, None, "r1", headers=h)
-    r2, s2 = await ingest(db_session, raw, None, "r2", headers=h)
+    r1, s1 = await ingest(db_session, raw, "r1", headers=h)
+    r2, s2 = await ingest(db_session, raw, "r2", headers=h)
     assert s1 == 201
     assert s2 == 200
     assert r1.event_id == r2.event_id
@@ -109,7 +119,7 @@ async def test_ingest_duplicate(db_session: AsyncSession, stripe_webhook_secret:
 
 @pytest.mark.asyncio
 async def test_ingest_invalid_empty(db_session: AsyncSession):
-    body, status = await ingest(db_session, json.dumps({}).encode(), None, "req-1")
+    body, status = await ingest(db_session, json.dumps({}).encode(), "req-1")
     assert status == 202
     assert body.status == "invalid"
     assert body.dlq is True
@@ -117,7 +127,7 @@ async def test_ingest_invalid_empty(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_ingest_invalid_bad_json(db_session: AsyncSession):
-    body, status = await ingest(db_session, b"not json", None, "req-1")
+    body, status = await ingest(db_session, b"not json", "req-1")
     assert status == 202
     assert body.status == "invalid"
 
@@ -135,7 +145,7 @@ async def test_ingest_stripe_signature_invalid(db_session: AsyncSession, monkeyp
     )
     raw = json.dumps(STRIPE_PAYLOAD).encode()
     body, status = await ingest(
-        db_session, raw, None, "req-1", headers={"Stripe-Signature": "t=1,v1=invalid"}
+        db_session, raw, "req-1", headers={"Stripe-Signature": "t=1,v1=invalid"}
     )
     assert status == 401
     assert body.status == "invalid"
@@ -149,7 +159,7 @@ async def test_ingest_stripe_signature_invalid(db_session: AsyncSession, monkeyp
 async def test_ingest_adyen_created(db_session: AsyncSession, adyen_hmac_key: str):
     payload = make_adyen_signed_payload(adyen_hmac_key)
     raw = json.dumps(payload).encode()
-    body, status = await ingest(db_session, raw, None, "req-adyen")
+    body, status = await ingest(db_session, raw, "req-adyen")
     assert status == 201
     assert body.event_id
     assert body.status == "created"
@@ -159,7 +169,7 @@ async def test_ingest_adyen_created(db_session: AsyncSession, adyen_hmac_key: st
 async def test_ingest_adyen_returns_standardized(db_session: AsyncSession, adyen_hmac_key: str):
     payload = make_adyen_signed_payload(adyen_hmac_key)
     raw = json.dumps(payload).encode()
-    body, _ = await ingest(db_session, raw, None, "req-adyen")
+    body, _ = await ingest(db_session, raw, "req-adyen")
     assert body.standardized
     std = body.standardized
     assert set(std.keys()) == {"event_id", "source", "extracted", "raw"}
@@ -175,8 +185,8 @@ async def test_ingest_adyen_returns_standardized(db_session: AsyncSession, adyen
 async def test_ingest_adyen_duplicate(db_session: AsyncSession, adyen_hmac_key: str):
     payload = make_adyen_signed_payload(adyen_hmac_key)
     raw = json.dumps(payload).encode()
-    r1, s1 = await ingest(db_session, raw, None, "r1")
-    r2, s2 = await ingest(db_session, raw, None, "r2")
+    r1, s1 = await ingest(db_session, raw, "r1")
+    r2, s2 = await ingest(db_session, raw, "r2")
     assert s1 == 201
     assert s2 == 200
     assert r1.event_id == r2.event_id
@@ -195,7 +205,7 @@ async def test_ingest_adyen_signature_invalid(db_session: AsyncSession, monkeypa
     )
     payload = make_adyen_signed_payload("44782DEF547AAA06C910C43932B1EB0C71FC68D9D0C057550C48EC2ACF6BA056")
     raw = json.dumps(payload).encode()
-    body, status = await ingest(db_session, raw, None, "req-adyen")
+    body, status = await ingest(db_session, raw, "req-adyen")
     assert status == 401
     assert body.status == "invalid"
     assert body.reason == "invalid signature"
@@ -226,6 +236,6 @@ async def test_ingest_paypal_signature_invalid(db_session: AsyncSession, monkeyp
     raw = json.dumps(payload).encode()
     # Pass paypal-transmission-id so we attempt verification; other headers missing → verification fails → 401
     headers = {"paypal-transmission-id": "t-123"}
-    body, status = await ingest(db_session, raw, None, "req-paypal", headers=headers)
+    body, status = await ingest(db_session, raw, "req-paypal", headers=headers)
     assert status == 401
     assert body.reason == "invalid signature"

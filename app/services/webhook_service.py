@@ -9,7 +9,7 @@ from app.core.retry import with_retry
 from app.db.events import insert_event
 from app.models.schemas import WebhookOut
 from app.utils.event_id import derive_event_id
-from app.utils.normalize import normalize_webhook
+from app.utils.normalize import detect_source, normalize_webhook
 from app.utils.adyen_signature import verify_adyen_signature
 from app.utils.paypal_signature import verify_paypal_signature
 from app.utils.stripe_signature import verify_stripe_signature
@@ -75,7 +75,6 @@ def _get_header(headers: dict | None, key: str) -> str | None:
 async def ingest(
     session: AsyncSession,
     raw: bytes,
-    idempotency_key: str | None,
     request_id: str,
     *,
     headers: dict | None = None,
@@ -154,7 +153,8 @@ async def ingest(
             )
             return WebhookOut(status="invalid", dlq=True, reason="invalid signature"), 401
 
-    event_id = derive_event_id(body, idempotency_key)
+    source = detect_source(body, headers)
+    event_id = derive_event_id(source, body)
     standardized = normalize_webhook(body, event_id, headers=headers)
 
     logger.info(

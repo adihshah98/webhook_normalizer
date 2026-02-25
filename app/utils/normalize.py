@@ -519,6 +519,11 @@ def _detect_source(raw: dict, headers: dict | None = None) -> str:
     return "unknown"
 
 
+def detect_source(raw: dict, headers: dict | None = None) -> str:
+    """Public: detect provider from headers then body. Used for idempotency key derivation."""
+    return _detect_source(raw, headers)
+
+
 def normalize_webhook(raw: dict, event_id: str, headers: dict | None = None) -> dict:
     """
     Map inbound webhook to standardized output.

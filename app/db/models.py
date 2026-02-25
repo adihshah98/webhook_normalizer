@@ -11,7 +11,7 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    event_id: Mapped[str] = mapped_column(String(256), unique=True, index=True, nullable=False)
     payload: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False

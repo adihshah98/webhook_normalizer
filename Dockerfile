@@ -12,5 +12,5 @@ COPY pyproject.toml .
 
 EXPOSE 8000
 
-# Run migrations separately before deploy (see DEPLOY.md). Container just starts the app.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run migrations before starting the app.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
